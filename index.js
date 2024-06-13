@@ -5,8 +5,16 @@ require('dotenv').config();
 const jwt = require('jsonwebtoken')
 const app = express()
 const port = process.env.PORT || 3000;
+const stripe = require("stripe")('sk_test_51PL0IQA3UvLG1lBCuUovljhHFdpOC8XNpGQ08lUb3bqxyeDa54HZ3ZHEyopWkSYN26ytUN5ObMwelsqLAyRfEACX002YB1Rrui');
 app.use(cors())
 app.use(express.json())
+
+const formData = require('form-data');
+const Mailgun = require('mailgun.js');
+const mailgun = new Mailgun(formData);
+const mg = mailgun.client(
+  {username: 'api', 
+  key: process.env.MAILGUN_API_KEY });
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PAS}@cluster0.zgmhkd0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -21,14 +29,131 @@ const client = new MongoClient(uri, {
 
 
 
+
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
+
+
+    const verify = (req, res, next) => {
+      if (!req.headers.authorization) {
+        return res.status(401).send({ message: "error" })
+      }
+      const token = req.headers.authorization
+
+      jwt.verify(token, process.env.JWT_TOKEN, (err, decoded) => {
+        if (err) {
+          return res.status(403).send({ message: 'forbid access' })
+        }
+
+        req.user = decoded
+        next()
+      })
+    }
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.user.email;
+      const filter = { email: email }
+      const user = await Users.findOne(filter);
+      const admin = user?.role === 'admin'
+      if (!admin) {
+        return res.status(403).send({ message: "forbidden access" })
+      }
+      next()
+    }
 
     const menu = client.db("bistro").collection("menu");
     const review = client.db("bistro").collection("reviews");
     const cardData = client.db('bistro').collection('card')
     const Users = client.db('bistro').collection('users')
+    const payment = client.db('bistro').collection('payments')
+
+
+
+
+
+
+
+
+
+
+
+    // payment history 
+    app.post('/payment', async (req, res) => {
+      const result = await payment.insertOne(req.body)
+      const query = {
+        _id: {
+          $in: req.body.cardId?.map(i => new ObjectId(i))
+        }
+      }
+      const deleteResult = await cardData.deleteMany(query)
+
+
+      // mail send
+      mg.messages.create('sandbox7374a0950d3b4f4f86f3e2b2f8c9a874.mailgun.org', {
+        from: "Mailgun Sandbox <Postmaster@sandbox7374a0950d3b4f4f86f3e2b2f8c9a874.mailgun.org>",
+        to: ["mdafsar99009@gmail.com"],
+        subject: "bistro boss",
+        text: "Testing some Mailgun awesomeness!",
+        html: `<h1>Your transId ${req.body.tId} </h1>`
+      })
+      .then(msg => console.log(msg)) 
+      .catch(err => console.log(err)); 
+
+
+
+
+      res.send({ result, deleteResult })
+    })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    app.get('/payment/:email',verify,async(req,res)=>{
+      if(req.params.email!==req.user.email){
+        return res.status(401).send({message:'unAuth'})
+      }
+      const result=await payment.find({email:req.params.email}).toArray();
+      res.send(result)
+    })
+
+
+    // stripe payment method 
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: parseInt(price * 100),
+        currency: "usd",
+        payment_method_types: [
+          "card",
+        ],
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
 
 
     app.post('/jwt', (req, res) => {
@@ -38,12 +163,46 @@ async function run() {
     })
 
 
-
-
     app.get('/menu', async (req, res) => {
       const result = await menu.find().toArray()
       res.send(result)
     })
+
+    app.get('/menu/:id', async (req, res) => {
+      const result = await menu.findOne({ _id: req.params.id })
+      res.send(result)
+    })
+
+    app.post('/menu', verify, verifyAdmin, async (req, res) => {
+      const result = await menu.insertOne(req.body);
+      res.send(result)
+      console.log(result)
+    })
+
+    app.put('/menu/:id', async (req, res) => {
+      const item = req.body;
+      const updateDoc = {
+        $set: {
+          image: item.image,
+          category: item.category,
+          price: item.price,
+          recipe: item.recipe,
+          name: item.name,
+        }
+      }
+      const result = await menu.updateOne({ _id: req.params.id }, updateDoc)
+      res.send(result);
+    })
+
+
+    app.delete('/menu/:id', async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: id }
+      const result = await menu.deleteOne(filter);
+      res.send(result)
+
+    })
+
     app.get('/review', async (req, res) => {
       const result = await review.find().toArray()
       res.send(result)
@@ -71,37 +230,6 @@ async function run() {
     })
 
 
-    const verify = (req, res, next) => {
-      console.log(req.headers)
-      if (!req.headers.authorization) {
-        return res.status(401).res.send({ message: "error" })
-      }
-      const token = req.headers.authorization
-    
-      jwt.verify(token, process.env.JWT_TOKEN, (err, decoded) => {
-        if (err) {
-          return res.status(403).res.send({ message: 'forbid access' })
-        }
-    
-        req.user = decoded
-        next()
-      })
-    }
-
-    const verifyAdmin=async(req,res,next)=>{
-      const email=req.user.email;
-      const filter={email:email}
-      const user=await Users.findOne(filter);
-      const admin=user?.role==='admin'
-      if(!admin){
-        return res.status(403).send({message:"forbidden access"})
-      }
-      next()
-    }
-
-
-
-
     // website users 
     app.post('/users', async (req, res) => {
 
@@ -116,39 +244,27 @@ async function run() {
       res.send(result)
     })
 
-    
-
-
-
-   
-      
-
     app.get('/users', verify, verifyAdmin, async (req, res) => {
       const result = await Users.find().toArray();
       res.send(result)
     });
 
+    app.get('/user/:email', verify, async (req, res) => {
 
-
-    app.get('/user/:email',verify,async(req,res)=>{
-
-      const email=req.params.email;
-      if(email!==req.user.email){
-        return res.status(401).send({message:'cannot access'})
+      const email = req.params.email;
+      if (email !== req.user.email) {
+        return res.status(401).send({ message: 'cannot access' })
       }
 
-      const filter={email:email};
-      const user=await Users.findOne(filter);
-      let admin=false;
-      if(user){
-        admin=user?.role==='admin'
+      const filter = { email: email };
+      const user = await Users.findOne(filter);
+      let admin = false;
+      if (user) {
+        admin = user?.role === 'admin'
       }
-      res.send({admin})
+      res.send({ admin })
 
     })
-
-
-
 
     app.delete('/users/:id', async (req, res) => {
       console.log(req.params.id)
@@ -168,12 +284,80 @@ async function run() {
       res.send(result)
     })
 
+    // admin stats
+    app.get('/admin-stats',async(req,res)=>{
+       const users=await Users.estimatedDocumentCount();
+       const menuItem=await menu.estimatedDocumentCount();
+       const orders=await payment.estimatedDocumentCount();
+
+      //  const payments=await payment.find().toArray()
+      //  const revenue=payments.reduce((p,c)=>p+c.price,0)
+
+      const result=await payment.aggregate([
+        {
+          $group:{
+            _id:null,
+            totalRevenue:{
+              $sum:"$price"
+            }
+          }
+        }
+      ]).toArray();
+      const revenue=result.length>0 ? result[0].totalRevenue : 0;
+
+       res.send({
+        users,
+        menuItem,
+        orders,
+        revenue
+       })
+    })
+
+    // order-stats
+
+    app.get('/order-stats',async(req,res)=>{
+
+      const result=await payment.aggregate([
+        {
+          $unwind:'$menuId'
+        },
+        {
+          $lookup:{
+            from:'menu',
+            localField: 'menuId',
+            foreignField: '_id',
+            as: 'menuItems'
+          }
+        },
+        {
+          $unwind:'$menuItems'
+        },
+        {
+          $group: {
+            _id: '$menuItems.category',
+            quantity:{ $sum: 1 },
+            revenue: { $sum: '$menuItems.price'} 
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            category: '$_id',
+            quantity: '$quantity',
+            revenue: '$revenue'
+        }}
+      ]).toArray()
+
+      res.send(result)
+
+    })
+
 
 
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
   }
