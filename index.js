@@ -3,18 +3,23 @@ const express = require('express')
 const cors = require('cors')
 require('dotenv').config();
 const jwt = require('jsonwebtoken')
+const bodyParser = require('body-parser');
 const app = express()
 const port = process.env.PORT || 3000;
 const stripe = require("stripe")('sk_test_51PL0IQA3UvLG1lBCuUovljhHFdpOC8XNpGQ08lUb3bqxyeDa54HZ3ZHEyopWkSYN26ytUN5ObMwelsqLAyRfEACX002YB1Rrui');
 app.use(cors())
 app.use(express.json())
+app.use(bodyParser.urlencoded({ extended: true }))
 
 const formData = require('form-data');
 const Mailgun = require('mailgun.js');
+const { default: axios } = require('axios');
 const mailgun = new Mailgun(formData);
 const mg = mailgun.client(
-  {username: 'api', 
-  key: process.env.MAILGUN_API_KEY });
+  {
+    username: 'api',
+    key: process.env.MAILGUN_API_KEY
+  });
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PAS}@cluster0.zgmhkd0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -68,6 +73,7 @@ async function run() {
     const cardData = client.db('bistro').collection('card')
     const Users = client.db('bistro').collection('users')
     const payment = client.db('bistro').collection('payments')
+    const payment2 = client.db('bistro').collection('payments2')
 
 
 
@@ -98,8 +104,8 @@ async function run() {
         text: "Testing some Mailgun awesomeness!",
         html: `<h1>Your transId ${req.body.tId} </h1>`
       })
-      .then(msg => console.log(msg)) 
-      .catch(err => console.log(err)); 
+        .then(msg => console.log(msg))
+        .catch(err => console.log(err));
 
 
 
@@ -128,11 +134,11 @@ async function run() {
 
 
 
-    app.get('/payment/:email',verify,async(req,res)=>{
-      if(req.params.email!==req.user.email){
-        return res.status(401).send({message:'unAuth'})
+    app.get('/payment/:email', verify, async (req, res) => {
+      if (req.params.email !== req.user.email) {
+        return res.status(401).send({ message: 'unAuth' })
       }
-      const result=await payment.find({email:req.params.email}).toArray();
+      const result = await payment.find({ email: req.params.email }).toArray();
       res.send(result)
     })
 
@@ -285,58 +291,58 @@ async function run() {
     })
 
     // admin stats
-    app.get('/admin-stats',async(req,res)=>{
-       const users=await Users.estimatedDocumentCount();
-       const menuItem=await menu.estimatedDocumentCount();
-       const orders=await payment.estimatedDocumentCount();
+    app.get('/admin-stats', async (req, res) => {
+      const users = await Users.estimatedDocumentCount();
+      const menuItem = await menu.estimatedDocumentCount();
+      const orders = await payment.estimatedDocumentCount();
 
       //  const payments=await payment.find().toArray()
       //  const revenue=payments.reduce((p,c)=>p+c.price,0)
 
-      const result=await payment.aggregate([
+      const result = await payment.aggregate([
         {
-          $group:{
-            _id:null,
-            totalRevenue:{
-              $sum:"$price"
+          $group: {
+            _id: null,
+            totalRevenue: {
+              $sum: "$price"
             }
           }
         }
       ]).toArray();
-      const revenue=result.length>0 ? result[0].totalRevenue : 0;
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
 
-       res.send({
+      res.send({
         users,
         menuItem,
         orders,
         revenue
-       })
+      })
     })
 
     // order-stats
 
-    app.get('/order-stats',async(req,res)=>{
+    app.get('/order-stats', async (req, res) => {
 
-      const result=await payment.aggregate([
+      const result = await payment.aggregate([
         {
-          $unwind:'$menuId'
+          $unwind: '$menuId'
         },
         {
-          $lookup:{
-            from:'menu',
+          $lookup: {
+            from: 'menu',
             localField: 'menuId',
             foreignField: '_id',
             as: 'menuItems'
           }
         },
         {
-          $unwind:'$menuItems'
+          $unwind: '$menuItems'
         },
         {
           $group: {
             _id: '$menuItems.category',
-            quantity:{ $sum: 1 },
-            revenue: { $sum: '$menuItems.price'} 
+            quantity: { $sum: 1 },
+            revenue: { $sum: '$menuItems.price' }
           }
         },
         {
@@ -345,12 +351,106 @@ async function run() {
             category: '$_id',
             quantity: '$quantity',
             revenue: '$revenue'
-        }}
+          }
+        }
       ]).toArray()
 
       res.send(result)
 
     })
+
+    //////////////////////////////
+
+
+
+
+
+    // ssl commerce payment 
+    app.post('/create-payment', async (req, res) => {
+      const tId = new ObjectId().toString();
+      const Data =
+      {
+        store_id: 'onebu66721aa9a1773',
+        store_passwd: 'onebu66721aa9a1773@ssl',
+        total_amount: '100',
+        currency: 'BDT',
+        tran_id: tId,
+        success_url: 'http://localhost:3000/successful-payment',
+        fail_url: 'http://localhost:3000/fail',
+        cancel_url: 'http://localhost:3000/cancel',
+        product_name: 'laptop',
+        product_category: 'genaral',
+        product_profile: 'shopping',
+        cus_name: 'Customer Name',
+        cus_email: 'cust@yahoo.com',
+        cus_add1: 'Dhaka',
+        cus_add2: 'Dhaka',
+        cus_city: 'Dhaka',
+        cus_state: 'Dhaka',
+        cus_postcode: '1000',
+        cus_country: 'Bangladesh',
+        cus_phone: '01711111111',
+        cus_fax: '01711111111',
+        shipping_method: 'NO',
+        multi_card_name: 'mastercard,visacard,amexcard',
+        value_a: 'ref001_A',
+        value_b: 'ref002_B',
+        value_c: 'ref003_C',
+        value_d: 'ref004_D'
+      }
+
+      const response = await axios({
+        method: 'post',
+        url: 'https://sandbox.sslcommerz.com/gwprocess/v4/api.php',
+        data: Data,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      })
+      const save = await payment2.insertOne({
+        status: 'pending',
+        price: 100,
+        tran_id: tId
+      })
+
+
+      if (save) {
+        res.send({ paymentURl: response.data.GatewayPageURL })
+      }
+    })
+
+    app.post('/successful-payment', async (req, res) => {
+
+      if (req.body?.status !== 'VALID') {
+        throw new Error('invalid payment')
+      }
+
+      // update the database 
+      const filter = { tran_id: req.body.tran_id }
+      const updateDoc = {
+        $set: {
+          status: 'success'
+        }
+      }
+      const result = await payment2.updateOne(filter, updateDoc);
+      res.redirect('http://localhost:5173/success')
+
+    })
+
+
+    
+    app.post('/fail', async (req, res) => {
+      res.redirect('http://localhost:5173/Fail')
+    })
+
+    app.post('/cancel', async (req, res) => {
+      res.redirect('http://localhost:5173/cancel')
+    })
+
+    
+
+
+
 
 
 
